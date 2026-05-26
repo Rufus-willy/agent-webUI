@@ -111,15 +111,31 @@ export class ResearchAgentService {
     let papersText = "";
     let paperCount = 0;
     let retrievalNote = "";
-    try {
-      status(`正在检索 Semantic Scholar：${searchQuery}`);
-      const papers = await this.semanticScholar.search(searchQuery, 24);
-      paperCount = papers.length;
-      papersText = this.semanticScholar.formatForPrompt(papers);
-      retrievalNote = `Semantic Scholar returned ${paperCount} papers for query: ${searchQuery}`;
-    } catch (error) {
-      retrievalNote = error instanceof Error ? error.message : String(error);
-      papersText = "No live papers were retrieved. The final report must clearly mark this limitation.";
+    status(`正在检索 Semantic Scholar：${searchQuery}`);
+    status("如 Semantic Scholar 限流，将自动切换 OpenAlex 兜底检索...");
+    const searchResult = await this.semanticScholar.searchWithFallback(searchQuery, 24);
+    paperCount = searchResult.papers.length;
+    retrievalNote = searchResult.note;
+    papersText = this.semanticScholar.formatForPrompt(searchResult.papers);
+
+    if (!paperCount) {
+      const failureMessage = [
+        "这次没有生成最终 PDF/Markdown 报告，因为没有检索到可核验的真实文献。",
+        "",
+        "我已经尝试了 Semantic Scholar，并在失败或限流时切换到 OpenAlex 兜底，但两边都没有返回可用结果。为了避免生成“零篇文献”的演示稿，我先暂停在这里。",
+        "",
+        `检索式：${searchQuery}`,
+        "",
+        "可以稍后直接回复“重新检索”，或者把范围放宽一些，例如减少 pH、年份、论文类型限制。"
+      ].join("\n");
+      this.db.updateSessionStage(sessionId, "clarifying");
+      const assistantMessage = this.db.addMessage({
+        sessionId,
+        role: "assistant",
+        content: failureMessage
+      });
+      status("未检索到真实文献，已暂停生成报告。");
+      return { assistantMessage, artifacts: [] };
     }
 
     status("正在综合证据并生成最终调研报告...");
@@ -130,7 +146,7 @@ export class ResearchAgentService {
       [
         {
           role: "system",
-          content: `${skillPrompt}\n\n你现在必须输出最终调研报告。报告必须是中文 Markdown，不要输出寒暄。必须包含：研究问题、检索方法、核心结论、代表性文献表、证据强度、争议点、研究空白、后续建议、参考文献与链接。即使检索结果有限，也必须生成一个标明局限性的总结性调研文档。`
+          content: `${skillPrompt}\n\n你现在必须输出最终调研报告。报告必须是中文 Markdown，不要输出寒暄。必须包含：研究问题、检索方法、核心结论、代表性文献表、证据强度、争议点、研究空白、后续建议、参考文献与链接。你只能基于提供的真实论文元数据总结；不得声称“零篇原始论文”“检索工具故障”“仅作为结构演示”，除非论文元数据为空。`
         },
         {
           role: "user",
@@ -138,8 +154,9 @@ export class ResearchAgentService {
             `用户调研需求与澄清信息：\n${topicContext}`,
             `检索说明：${retrievalNote}`,
             `检索式：${searchQuery}`,
+            `候选文献数量：${paperCount}`,
             `论文元数据：\n${papersText}`,
-            `请基于以上论文和 skills 生成可直接下载归档的完整调研报告。不要虚构未提供的事实；如果某项证据不足，请明确写出。`
+            `请基于以上论文和 skills 生成可直接下载归档的完整调研报告。不要虚构未提供的事实；如果某项证据不足，请明确写出“证据有限”，但不要把报告写成检索失败说明。`
           ].join("\n\n")
         }
       ],

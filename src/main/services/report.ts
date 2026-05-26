@@ -130,7 +130,20 @@ export class ReportService {
     <meta charset="utf-8" />
     <title>${escapeHtml(title)}</title>
     <style>
+      :root {
+        color-scheme: light;
+        background: #ffffff;
+      }
+      * {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      html {
+        background: #ffffff;
+      }
       body {
+        margin: 0;
+        background: #ffffff;
         color: #182026;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         font-size: 13px;
@@ -151,7 +164,11 @@ export class ReportService {
   </head>
   <body>${markdownToHtml(markdown)}</body>
 </html>`;
-    const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+    const win = new BrowserWindow({
+      show: false,
+      backgroundColor: "#ffffff",
+      webPreferences: { sandbox: true }
+    });
     try {
       await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
       const pdf = await win.webContents.printToPDF({
