@@ -1,0 +1,3 @@
+[submodule "literature-research"]
+	path = literature-research
+	url = https://github.com/biocheming/literature-research.git
