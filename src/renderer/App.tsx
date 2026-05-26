@@ -192,6 +192,9 @@ export function App() {
   const [canceling, setCanceling] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [followOutput, setFollowOutput] = useState(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const messageListRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const currentSessionId = detail?.session.id || "";
@@ -211,6 +214,8 @@ export function App() {
     const next = await window.agentAPI.sessions.get(id);
     setDetail(next);
     setStatusText("");
+    setFollowOutput(true);
+    setShowJumpToBottom(false);
   }
 
   async function bootstrap() {
@@ -272,9 +277,26 @@ export function App() {
     };
   }, [currentSessionId]);
 
+  function isNearBottom(element: HTMLElement) {
+    return element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+  }
+
+  function scrollToBottom(behavior: ScrollBehavior = "smooth") {
+    scrollRef.current?.scrollIntoView({ behavior, block: "end" });
+  }
+
+  function handleMessageScroll() {
+    const element = messageListRef.current;
+    if (!element) return;
+    const nearBottom = isNearBottom(element);
+    setFollowOutput(nearBottom);
+    setShowJumpToBottom(!nearBottom);
+  }
+
   useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [detail?.messages, statusText]);
+    if (!followOutput) return;
+    scrollToBottom("smooth");
+  }, [detail?.messages, statusText, followOutput]);
 
   async function newSession() {
     const session = await window.agentAPI.sessions.create();
@@ -313,6 +335,8 @@ export function App() {
     setDetail((current) => (current ? { ...current, messages: [...current.messages, optimistic] } : current));
     setInput("");
     setBusy(true);
+    setFollowOutput(true);
+    setShowJumpToBottom(false);
     setStatusText("");
     try {
       await window.agentAPI.chat.sendMessage(sessionId, trimmed);
@@ -431,7 +455,7 @@ export function App() {
             </p>
           </div>
         </header>
-        <section className="message-list">
+        <section className="message-list" ref={messageListRef} onScroll={handleMessageScroll}>
           {!detail?.messages.length && (
             <div className="empty-state">
               <h2>告诉我你想调研的课题</h2>
@@ -458,6 +482,19 @@ export function App() {
           )}
           <div ref={scrollRef} />
         </section>
+        {showJumpToBottom && (
+          <button
+            className="jump-bottom-button"
+            title="回到底部"
+            onClick={() => {
+              setFollowOutput(true);
+              setShowJumpToBottom(false);
+              scrollToBottom();
+            }}
+          >
+            ↓
+          </button>
+        )}
         <footer className="composer">
           <textarea
             value={input}
