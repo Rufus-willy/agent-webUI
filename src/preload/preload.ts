@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("agentAPI", {
   chat: {
     sendMessage: (sessionId: string, content: string) =>
       ipcRenderer.invoke("chat:sendMessage", sessionId, content) as Promise<ChatSendResult>,
+    cancel: (sessionId: string) => ipcRenderer.invoke("chat:cancel", sessionId) as Promise<boolean>,
     onDelta: (callback: (event: ChatDeltaEvent) => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: ChatDeltaEvent) => callback(event);
       ipcRenderer.on("chat:delta", listener);

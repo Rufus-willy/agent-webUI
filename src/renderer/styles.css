@@ -441,6 +441,14 @@ button:disabled {
   background: #276f4b;
 }
 
+.send-button.stop {
+  background: #b42318;
+}
+
+.send-button.stop:hover {
+  background: #912018;
+}
+
 .modal-backdrop {
   position: fixed;
   z-index: 20;

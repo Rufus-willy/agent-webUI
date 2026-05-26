@@ -75,10 +75,10 @@ export function paperUrl(paper: SemanticPaper) {
 }
 
 export class SemanticScholarService {
-  async searchWithFallback(query: string, limit = 24): Promise<LiteratureSearchResult> {
+  async searchWithFallback(query: string, limit = 24, signal?: AbortSignal): Promise<LiteratureSearchResult> {
     const notes: string[] = [];
     try {
-      const papers = await this.search(query, limit);
+      const papers = await this.search(query, limit, signal);
       notes.push(`Semantic Scholar returned ${papers.length} papers for query: ${query}`);
       if (papers.length) {
         return { papers, note: notes.join("\n") };
@@ -88,7 +88,8 @@ export class SemanticScholarService {
     }
 
     try {
-      const papers = await this.searchOpenAlex(query, limit);
+      signal?.throwIfAborted();
+      const papers = await this.searchOpenAlex(query, limit, signal);
       notes.push(`OpenAlex fallback returned ${papers.length} papers for query: ${query}`);
       return { papers, note: notes.join("\n") };
     } catch (error) {
@@ -97,7 +98,7 @@ export class SemanticScholarService {
     }
   }
 
-  async search(query: string, limit = 20): Promise<SemanticPaper[]> {
+  async search(query: string, limit = 20, signal?: AbortSignal): Promise<SemanticPaper[]> {
     const params = new URLSearchParams({
       query,
       limit: String(Math.min(Math.max(limit, 1), 100)),
@@ -106,7 +107,8 @@ export class SemanticScholarService {
     });
     let lastError = "";
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(`${BASE_URL}/paper/search?${params.toString()}`);
+      signal?.throwIfAborted();
+      const response = await fetch(`${BASE_URL}/paper/search?${params.toString()}`, { signal });
       const body = await response.text();
       if (response.ok) {
         const payload = JSON.parse(body) as { data?: SemanticPaper[] };
@@ -124,7 +126,7 @@ export class SemanticScholarService {
     throw new Error(lastError || "Semantic Scholar 检索失败。");
   }
 
-  async searchOpenAlex(query: string, limit = 24): Promise<SemanticPaper[]> {
+  async searchOpenAlex(query: string, limit = 24, signal?: AbortSignal): Promise<SemanticPaper[]> {
     const params = new URLSearchParams({
       search: query,
       "per-page": String(Math.min(Math.max(limit, 1), 100)),
@@ -132,6 +134,7 @@ export class SemanticScholarService {
       filter: "from_publication_date:2019-01-01,to_publication_date:2026-12-31"
     });
     const response = await fetch(`${OPENALEX_URL}?${params.toString()}`, {
+      signal,
       headers: {
         "User-Agent": "agent-webui/0.1.0 (mailto:suwenbinra@gmail.com)"
       }

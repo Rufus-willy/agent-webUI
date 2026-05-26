@@ -9,6 +9,7 @@ import {
   PanelLeft,
   Send,
   Settings,
+  Square,
   Trash2
 } from "lucide-react";
 import type {
@@ -188,6 +189,7 @@ export function App() {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [canceling, setCanceling] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [loadError, setLoadError] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -337,6 +339,19 @@ export function App() {
       );
     } finally {
       setBusy(false);
+      setCanceling(false);
+      setStatusText("");
+    }
+  }
+
+  async function cancelCurrentRun() {
+    if (!detail || canceling) return;
+    setCanceling(true);
+    setStatusText("正在停止当前生成...");
+    const canceled = await window.agentAPI.chat.cancel(detail.session.id);
+    if (!canceled) {
+      setBusy(false);
+      setCanceling(false);
       setStatusText("");
     }
   }
@@ -447,12 +462,6 @@ export function App() {
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                send();
-              }
-            }}
             placeholder={
               detail?.session.researchStage === "clarifying"
                 ? "回答这些澄清问题，AI 将开始检索并生成报告..."
@@ -460,8 +469,13 @@ export function App() {
             }
             disabled={busy || !settingsStatus?.hasApiKey}
           />
-          <button className="send-button" disabled={!input.trim() || busy || !settingsStatus?.hasApiKey} onClick={send}>
-            {busy ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
+          <button
+            className={`send-button ${busy ? "stop" : ""}`}
+            title={busy ? "停止当前生成" : "发送"}
+            disabled={(!busy && !input.trim()) || !settingsStatus?.hasApiKey || canceling}
+            onClick={busy ? cancelCurrentRun : send}
+          >
+            {busy ? <Square size={16} fill="currentColor" /> : <Send size={18} />}
           </button>
         </footer>
       </main>

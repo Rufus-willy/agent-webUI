@@ -48,10 +48,14 @@ export class DeepSeekService {
     return Boolean(payload.data?.some((model) => model.id === "deepseek-v4-pro"));
   }
 
-  async complete(messages: ChatMessage[], options: { temperature?: number; maxTokens?: number } = {}) {
+  async complete(
+    messages: ChatMessage[],
+    options: { temperature?: number; maxTokens?: number; signal?: AbortSignal } = {}
+  ) {
     const apiKey = this.requireApiKey();
     const response = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
+      signal: options.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`
@@ -79,11 +83,12 @@ export class DeepSeekService {
   async stream(
     messages: ChatMessage[],
     onDelta: (delta: string) => void,
-    options: { temperature?: number; maxTokens?: number } = {}
+    options: { temperature?: number; maxTokens?: number; signal?: AbortSignal } = {}
   ) {
     const apiKey = this.requireApiKey();
     const response = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
+      signal: options.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`
@@ -108,6 +113,7 @@ export class DeepSeekService {
     let content = "";
 
     while (true) {
+      options.signal?.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) {
         break;

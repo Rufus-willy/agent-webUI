@@ -85,6 +85,8 @@ function registerIpc() {
     return researchAgent.sendMessage(sessionId, content, mainWindow.webContents);
   });
 
+  ipcMain.handle("chat:cancel", (_, sessionId: string) => researchAgent.cancel(sessionId));
+
   ipcMain.handle("artifacts:saveAs", async (_, id: string) => {
     const artifact = db.getArtifact(id);
     if (!artifact) {

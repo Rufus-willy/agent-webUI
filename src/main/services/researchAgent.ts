@@ -29,7 +29,22 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
+function isAbortError(error: unknown) {
+  return (
+    error instanceof DOMException && error.name === "AbortError" ||
+    error instanceof Error && error.name === "AbortError"
+  );
+}
+
+interface ActiveTask {
+  controller: AbortController;
+  lastMessageId?: string;
+  messageContents: Map<string, string>;
+}
+
 export class ResearchAgentService {
+  private readonly activeTasks = new Map<string, ActiveTask>();
+
   constructor(
     private readonly db: DatabaseService,
     private readonly deepSeek: DeepSeekService,
@@ -38,37 +53,71 @@ export class ResearchAgentService {
     private readonly reports: ReportService
   ) {}
 
-  async sendMessage(sessionId: string, content: string, webContents: WebContents): Promise<ChatSendResult> {
-    const session = this.db.getSession(sessionId) || this.db.createSession();
-    const previousMessages = this.db.listMessages(session.id);
-    if (!previousMessages.length) {
-      this.db.renameSession(session.id, compactTitle(content));
+  cancel(sessionId: string) {
+    const task = this.activeTasks.get(sessionId);
+    if (!task) {
+      return false;
     }
-    if (session.researchStage === "researching") {
-      throw new Error("当前会话正在调研中，请等待本轮调研完成。");
-    }
-
-    const userMessage = this.db.addMessage({ sessionId: session.id, role: "user", content });
-    const refreshedSession = this.db.getSession(session.id)!;
-
-    if (refreshedSession.researchStage === "idle") {
-      const assistantMessage = await this.askClarifyingQuestions(session.id, webContents);
-      const latest = this.db.getSession(session.id)!;
-      return { userMessage, assistantMessage, session: latest, artifacts: [] };
-    }
-
-    if (refreshedSession.researchStage === "clarifying") {
-      const { assistantMessage, artifacts } = await this.runResearch(session.id, webContents);
-      const latest = this.db.getSession(session.id)!;
-      return { userMessage, assistantMessage, session: latest, artifacts };
-    }
-
-    const assistantMessage = await this.followUp(session.id, webContents);
-    const latest = this.db.getSession(session.id)!;
-    return { userMessage, assistantMessage, session: latest, artifacts: [] };
+    task.controller.abort();
+    return true;
   }
 
-  private async askClarifyingQuestions(sessionId: string, webContents: WebContents): Promise<MessageRecord> {
+  async sendMessage(sessionId: string, content: string, webContents: WebContents): Promise<ChatSendResult> {
+    const session = this.db.getSession(sessionId) || this.db.createSession();
+    if (this.activeTasks.has(session.id)) {
+      throw new Error("当前会话正在生成中，可以先点击停止按钮中断。");
+    }
+    const task: ActiveTask = {
+      controller: new AbortController(),
+      messageContents: new Map()
+    };
+    this.activeTasks.set(session.id, task);
+
+    const previousMessages = this.db.listMessages(session.id);
+    try {
+      if (!previousMessages.length) {
+        this.db.renameSession(session.id, compactTitle(content));
+      }
+      if (session.researchStage === "researching") {
+        throw new Error("当前会话正在调研中，可以先点击停止按钮中断。");
+      }
+
+      const userMessage = this.db.addMessage({ sessionId: session.id, role: "user", content });
+      const refreshedSession = this.db.getSession(session.id)!;
+
+      if (refreshedSession.researchStage === "idle") {
+        const assistantMessage = await this.askClarifyingQuestions(session.id, webContents, task);
+        const latest = this.db.getSession(session.id)!;
+        return { userMessage, assistantMessage, session: latest, artifacts: [] };
+      }
+
+      if (refreshedSession.researchStage === "clarifying") {
+        const { assistantMessage, artifacts } = await this.runResearch(session.id, webContents, task);
+        const latest = this.db.getSession(session.id)!;
+        return { userMessage, assistantMessage, session: latest, artifacts };
+      }
+
+      const assistantMessage = await this.followUp(session.id, webContents, task);
+      const latest = this.db.getSession(session.id)!;
+      return { userMessage, assistantMessage, session: latest, artifacts: [] };
+    } catch (error) {
+      if (!isAbortError(error)) {
+        throw error;
+      }
+      const assistantMessage = this.saveInterruptedMessage(session.id, webContents, task);
+      const latest = this.db.getSession(session.id)!;
+      const userMessage = this.db.listMessages(session.id).filter((message) => message.role === "user").at(-1)!;
+      return { userMessage, assistantMessage, session: latest, artifacts: [] };
+    } finally {
+      this.activeTasks.delete(session.id);
+    }
+  }
+
+  private async askClarifyingQuestions(
+    sessionId: string,
+    webContents: WebContents,
+    task: ActiveTask
+  ): Promise<MessageRecord> {
     const messageId = crypto.randomUUID();
     const messages = this.db.listMessages(sessionId);
     const prompt = this.skills.getResearchPrompt();
@@ -83,6 +132,7 @@ export class ResearchAgentService {
         ...messages.map((message) => ({ role: message.role, content: message.content } as ChatMessage))
       ],
       webContents,
+      task,
       { maxTokens: 1400 }
     );
     this.db.updateSessionStage(sessionId, "clarifying");
@@ -91,7 +141,8 @@ export class ResearchAgentService {
 
   private async runResearch(
     sessionId: string,
-    webContents: WebContents
+    webContents: WebContents,
+    task: ActiveTask
   ): Promise<{ assistantMessage: MessageRecord; artifacts: ArtifactRecord[] }> {
     this.db.updateSessionStage(sessionId, "researching");
     const status = (message: string) => this.emitStatus(webContents, sessionId, message);
@@ -103,17 +154,22 @@ export class ResearchAgentService {
     const session = this.db.getSession(sessionId)!;
 
     status("正在加载 literature-research skills...");
+    task.controller.signal.throwIfAborted();
     const skillPrompt = this.skills.getResearchPrompt();
 
     status("正在生成 Semantic Scholar 检索式...");
-    const searchQuery = await this.makeSearchQuery(topicContext, skillPrompt);
+    const searchQuery = await this.makeSearchQuery(topicContext, skillPrompt, task.controller.signal);
 
     let papersText = "";
     let paperCount = 0;
     let retrievalNote = "";
     status(`正在检索 Semantic Scholar：${searchQuery}`);
     status("如 Semantic Scholar 限流，将自动切换 OpenAlex 兜底检索...");
-    const searchResult = await this.semanticScholar.searchWithFallback(searchQuery, 24);
+    const searchResult = await this.semanticScholar.searchWithFallback(
+      searchQuery,
+      24,
+      task.controller.signal
+    );
     paperCount = searchResult.papers.length;
     retrievalNote = searchResult.note;
     papersText = this.semanticScholar.formatForPrompt(searchResult.papers);
@@ -161,9 +217,11 @@ export class ResearchAgentService {
         }
       ],
       webContents,
+      task,
       { maxTokens: 6800, temperature: 0.2 }
     );
 
+    task.controller.signal.throwIfAborted();
     status("正在写入 Markdown 与 PDF 文件...");
     const { markdownPath, pdfPath } = await this.reports.writeReportFiles(session.title, reportMarkdown);
     const markdownArtifact = this.db.addArtifact({
@@ -200,7 +258,11 @@ export class ResearchAgentService {
     return { assistantMessage, artifacts };
   }
 
-  private async followUp(sessionId: string, webContents: WebContents): Promise<MessageRecord> {
+  private async followUp(
+    sessionId: string,
+    webContents: WebContents,
+    task: ActiveTask
+  ): Promise<MessageRecord> {
     const messageId = crypto.randomUUID();
     const messages = this.db.listMessages(sessionId).slice(-12);
     const content = await this.streamToRenderer(
@@ -215,12 +277,13 @@ export class ResearchAgentService {
         ...messages.map((message) => ({ role: message.role, content: message.content } as ChatMessage))
       ],
       webContents,
+      task,
       { maxTokens: 2200 }
     );
     return this.db.addMessage({ id: messageId, sessionId, role: "assistant", content });
   }
 
-  private async makeSearchQuery(topicContext: string, skillPrompt: string) {
+  private async makeSearchQuery(topicContext: string, skillPrompt: string, signal: AbortSignal) {
     const raw = await this.deepSeek.complete(
       [
         {
@@ -233,7 +296,7 @@ export class ResearchAgentService {
             `请生成 JSON：{"query":"英文检索式","scope":"中文范围摘要"}。\n\n用户需求：\n${topicContext}`
         }
       ],
-      { maxTokens: 700, temperature: 0.1 }
+      { maxTokens: 700, temperature: 0.1, signal }
     );
     const parsed = extractJsonObject(raw);
     const query = typeof parsed?.query === "string" ? parsed.query.trim() : "";
@@ -245,16 +308,20 @@ export class ResearchAgentService {
     messageId: string,
     messages: ChatMessage[],
     webContents: WebContents,
+    task: ActiveTask,
     options: { maxTokens?: number; temperature?: number } = {}
   ) {
     let full = "";
+    task.lastMessageId = messageId;
+    task.messageContents.set(messageId, "");
     const content = await this.deepSeek.stream(
       messages,
       (delta) => {
         full += delta;
+        task.messageContents.set(messageId, full);
         webContents.send("chat:delta", { sessionId, messageId, delta } satisfies ChatDeltaEvent);
       },
-      options
+      { ...options, signal: task.controller.signal }
     );
     webContents.send("chat:delta", {
       sessionId,
@@ -263,6 +330,33 @@ export class ResearchAgentService {
       done: true
     } satisfies ChatDeltaEvent);
     return content || full.trim();
+  }
+
+  private saveInterruptedMessage(sessionId: string, webContents: WebContents, task: ActiveTask) {
+    const messageId = task.lastMessageId || crypto.randomUUID();
+    const partial = task.messageContents.get(messageId)?.trim() || "";
+    const interruptionNote = "已停止生成。你可以修改问题后重新发送。";
+    const content = partial ? `${partial}\n\n---\n\n${interruptionNote}` : interruptionNote;
+
+    if (task.lastMessageId) {
+      webContents.send("chat:delta", {
+        sessionId,
+        messageId,
+        delta: partial ? `\n\n---\n\n${interruptionNote}` : interruptionNote,
+        done: true
+      } satisfies ChatDeltaEvent);
+    }
+
+    if (this.db.getSession(sessionId)?.researchStage === "researching") {
+      this.db.updateSessionStage(sessionId, "clarifying");
+    }
+
+    return this.db.addMessage({
+      id: messageId,
+      sessionId,
+      role: "assistant",
+      content
+    });
   }
 
   private emitStatus(webContents: WebContents, sessionId: string, status: string) {

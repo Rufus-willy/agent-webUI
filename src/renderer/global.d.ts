@@ -28,6 +28,7 @@ declare global {
       };
       chat: {
         sendMessage(sessionId: string, content: string): Promise<ChatSendResult>;
+        cancel(sessionId: string): Promise<boolean>;
         onDelta(callback: (event: ChatDeltaEvent) => void): () => void;
         onResearchStatus(callback: (event: ResearchStatusEvent) => void): () => void;
       };
