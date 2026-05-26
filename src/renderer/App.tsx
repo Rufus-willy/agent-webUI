@@ -3,10 +3,12 @@ import {
   Download,
   ExternalLink,
   FileText,
+  FolderPlus,
   KeyRound,
   Loader2,
   MessageSquarePlus,
   PanelLeft,
+  Puzzle,
   Send,
   Settings,
   Square,
@@ -18,6 +20,7 @@ import type {
   MessageRecord,
   SessionDetail,
   SessionSummary,
+  SkillPackSummary,
   SettingsStatus
 } from "../shared/types";
 
@@ -183,6 +186,74 @@ function ArtifactButtons({ artifacts }: { artifacts: ArtifactRecord[] }) {
   );
 }
 
+function SkillsModal({
+  packs,
+  loading,
+  error,
+  onClose,
+  onAdd,
+  onToggle
+}: {
+  packs: SkillPackSummary[];
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+  onAdd: () => void;
+  onToggle: (id: string, active: boolean) => void;
+}) {
+  return (
+    <div className="modal-backdrop">
+      <section className="skills-modal" aria-label="Skills 管理">
+        <div className="skills-modal-header">
+          <div>
+            <div className="modal-icon">
+              <Puzzle size={22} />
+            </div>
+            <h1>Skills 管理</h1>
+            <p>添加本地 skill 目录，并选择哪些 skill 包参与调研 prompt。</p>
+          </div>
+          <button className="icon-button" onClick={onClose} title="关闭">
+            ×
+          </button>
+        </div>
+        {error && <div className="error-text">{error}</div>}
+        <div className="skills-list">
+          {packs.map((pack) => (
+            <div className="skill-pack-item" key={pack.id}>
+              <div className="skill-pack-main">
+                <div className="skill-pack-title">
+                  <span>{pack.name}</span>
+                  {pack.builtIn && <small>内置</small>}
+                </div>
+                <p>{pack.description || `${pack.skillCount} 个 skills`}</p>
+                <code>{pack.path}</code>
+              </div>
+              <label className="switch" title={pack.active ? "停用" : "激活"}>
+                <input
+                  type="checkbox"
+                  checked={pack.active}
+                  disabled={loading || pack.skillCount === 0}
+                  onChange={(event) => onToggle(pack.id, event.target.checked)}
+                />
+                <span />
+              </label>
+            </div>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose}>
+            关闭
+          </button>
+          <button className="primary-button" disabled={loading} onClick={onAdd}>
+            {loading ? <Loader2 className="spin" size={16} /> : <FolderPlus size={16} />}
+            添加本地 Skills
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function App() {
   const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -192,6 +263,10 @@ export function App() {
   const [canceling, setCanceling] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [skillPacks, setSkillPacks] = useState<SkillPackSummary[]>([]);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState("");
   const [followOutput, setFollowOutput] = useState(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const messageListRef = useRef<HTMLElement | null>(null);
@@ -210,6 +285,12 @@ export function App() {
     return items;
   }
 
+  async function refreshSkills() {
+    const packs = await window.agentAPI.skills.list();
+    setSkillPacks(packs);
+    return packs;
+  }
+
   async function loadSession(id: string) {
     const next = await window.agentAPI.sessions.get(id);
     setDetail(next);
@@ -222,6 +303,7 @@ export function App() {
     try {
       const status = await window.agentAPI.settings.getStatus();
       setSettingsStatus(status);
+      await refreshSkills();
       const items = await refreshSessions();
       if (items.length) {
         await loadSession(items[0].id);
@@ -302,6 +384,39 @@ export function App() {
     const session = await window.agentAPI.sessions.create();
     await refreshSessions();
     await loadSession(session.id);
+  }
+
+  async function openSkillsModal() {
+    setSkillsError("");
+    await refreshSkills();
+    setSkillsOpen(true);
+  }
+
+  async function addSkillDirectory() {
+    setSkillsError("");
+    setSkillsLoading(true);
+    try {
+      const packs = await window.agentAPI.skills.addDirectory();
+      if (packs) {
+        setSkillPacks(packs);
+      }
+    } catch (error) {
+      setSkillsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSkillsLoading(false);
+    }
+  }
+
+  async function toggleSkillPack(id: string, active: boolean) {
+    setSkillsError("");
+    setSkillsLoading(true);
+    try {
+      setSkillPacks(await window.agentAPI.skills.setActive(id, active));
+    } catch (error) {
+      setSkillsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSkillsLoading(false);
+    }
   }
 
   async function deleteSession(id: string) {
@@ -394,6 +509,16 @@ export function App() {
           }}
         />
       )}
+      {skillsOpen && (
+        <SkillsModal
+          packs={skillPacks}
+          loading={skillsLoading}
+          error={skillsError}
+          onClose={() => setSkillsOpen(false)}
+          onAdd={addSkillDirectory}
+          onToggle={toggleSkillPack}
+        />
+      )}
       <aside className="sidebar">
         <div className="sidebar-title">
           <PanelLeft size={18} />
@@ -402,6 +527,11 @@ export function App() {
         <button className="new-chat-button" onClick={newSession}>
           <MessageSquarePlus size={16} />
           新文献调研
+        </button>
+        <button className="skills-button" onClick={openSkillsModal}>
+          <Puzzle size={16} />
+          Skills
+          <span>{skillPacks.filter((pack) => pack.active).length}</span>
         </button>
         <div className="session-groups">
           {groupSessions(sessions).map(([group, items]) => (

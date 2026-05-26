@@ -15,7 +15,7 @@ const db = new DatabaseService();
 const settings = new SettingsService(db);
 const deepSeek = new DeepSeekService(settings);
 const semanticScholar = new SemanticScholarService();
-const skills = new SkillLoader();
+const skills = new SkillLoader(db);
 const reports = new ReportService();
 const researchAgent = new ResearchAgentService(db, deepSeek, semanticScholar, skills, reports);
 
@@ -77,6 +77,23 @@ function registerIpc() {
   ipcMain.handle("sessions:get", (_, id: string) => db.getSessionDetail(id));
   ipcMain.handle("sessions:rename", (_, id: string, title: string) => db.renameSession(id, title));
   ipcMain.handle("sessions:delete", (_, id: string) => db.deleteSession(id));
+
+  ipcMain.handle("skills:list", () => skills.listPacks());
+  ipcMain.handle("skills:addDirectory", async () => {
+    const openOptions: Electron.OpenDialogOptions = {
+      title: "选择 Skills 目录",
+      properties: ["openDirectory"]
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, openOptions)
+      : await dialog.showOpenDialog(openOptions);
+    if (result.canceled || !result.filePaths[0]) {
+      return null;
+    }
+    skills.addPack(result.filePaths[0]);
+    return skills.listPacks();
+  });
+  ipcMain.handle("skills:setActive", (_, id: string, active: boolean) => skills.setPackActive(id, active));
 
   ipcMain.handle("chat:sendMessage", async (_, sessionId: string, content: string) => {
     if (!mainWindow) {

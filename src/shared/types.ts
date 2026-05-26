@@ -66,6 +66,16 @@ export interface SaveApiKeyResult {
   error?: string;
 }
 
+export interface SkillPackSummary {
+  id: string;
+  name: string;
+  path: string;
+  active: boolean;
+  builtIn: boolean;
+  skillCount: number;
+  description?: string;
+}
+
 export interface SemanticPaper {
   paperId: string;
   title: string;

@@ -6,6 +6,7 @@ import type {
   SaveApiKeyResult,
   SessionDetail,
   SessionSummary,
+  SkillPackSummary,
   SettingsStatus
 } from "../shared/types";
 
@@ -25,6 +26,11 @@ declare global {
         get(id: string): Promise<SessionDetail>;
         rename(id: string, title: string): Promise<SessionSummary>;
         delete(id: string): Promise<void>;
+      };
+      skills: {
+        list(): Promise<SkillPackSummary[]>;
+        addDirectory(): Promise<SkillPackSummary[] | null>;
+        setActive(id: string, active: boolean): Promise<SkillPackSummary[]>;
       };
       chat: {
         sendMessage(sessionId: string, content: string): Promise<ChatSendResult>;

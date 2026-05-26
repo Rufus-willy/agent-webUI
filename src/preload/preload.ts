@@ -7,6 +7,7 @@ import type {
   SaveApiKeyResult,
   SessionDetail,
   SessionSummary,
+  SkillPackSummary,
   SettingsStatus
 } from "../shared/types";
 
@@ -26,6 +27,12 @@ contextBridge.exposeInMainWorld("agentAPI", {
     rename: (id: string, title: string) =>
       ipcRenderer.invoke("sessions:rename", id, title) as Promise<SessionSummary>,
     delete: (id: string) => ipcRenderer.invoke("sessions:delete", id) as Promise<void>
+  },
+  skills: {
+    list: () => ipcRenderer.invoke("skills:list") as Promise<SkillPackSummary[]>,
+    addDirectory: () => ipcRenderer.invoke("skills:addDirectory") as Promise<SkillPackSummary[] | null>,
+    setActive: (id: string, active: boolean) =>
+      ipcRenderer.invoke("skills:setActive", id, active) as Promise<SkillPackSummary[]>
   },
   chat: {
     sendMessage: (sessionId: string, content: string) =>
